@@ -15,6 +15,7 @@ from google import genai
 from dotenv import load_dotenv
 
 load_dotenv()
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = "gemini-2.0-flash"
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -25,7 +26,6 @@ app = Flask(__name__)
 # ---------------- FILE TYPE HELPERS ----------------
 
 def get_extension_from_content_type(content_type: str) -> str:
-    """Return correct file extension based on MIME type."""
     content_type = (content_type or "").lower()
 
     if "pdf" in content_type:
@@ -41,7 +41,6 @@ def get_extension_from_content_type(content_type: str) -> str:
 
 
 def get_extension_from_magic_bytes(header: bytes) -> str:
-    """Detect file type using magic bytes from Base64 or uploads without extension."""
     if header.startswith(b"%PDF"):
         return ".pdf"
     if header.startswith(b"\x89PNG"):
@@ -56,7 +55,6 @@ def get_extension_from_magic_bytes(header: bytes) -> str:
 # ---------------- UTILITIES ----------------
 
 def download_file(url: str) -> str:
-    """Download file from URL and save with correct extension."""
     response = requests.get(url, timeout=60)
     response.raise_for_status()
 
@@ -70,10 +68,8 @@ def download_file(url: str) -> str:
 
 
 def save_uploaded_file(file_storage) -> str:
-    """Save uploaded file (PDF or Image) with correct extension."""
     suffix = os.path.splitext(file_storage.filename)[1].lower()
 
-    # If file had no extension, detect from MIME type
     if suffix == "":
         suffix = get_extension_from_content_type(file_storage.content_type)
 
@@ -135,10 +131,8 @@ Rules:
 @app.route("/extract-bill-data", methods=["POST"])
 def extract_bill_data():
     try:
-        # -------- Step 1: Load file or URL --------
         if "file" in request.files:
             path = save_uploaded_file(request.files["file"])
-
         else:
             body = request.get_json(force=True)
             if "document" not in body:
@@ -146,15 +140,11 @@ def extract_bill_data():
 
             doc = body["document"]
 
-            # Case 1: URL
             if doc.startswith("http://") or doc.startswith("https://"):
                 path = download_file(doc)
-
-            # Case 2: base64 PDF or image
             else:
                 raw = base64.b64decode(doc)
-
-                header = raw[:4]  # First 4 bytes
+                header = raw[:4]
                 ext = get_extension_from_magic_bytes(header)
 
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
@@ -162,10 +152,8 @@ def extract_bill_data():
                 tmp.close()
                 path = tmp.name
 
-        # -------- Step 2: Upload file to Gemini --------
         file_ref = client.files.upload(file=path)
 
-        # -------- Step 3: Call Gemini LLM --------
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=[EXTRACTION_PROMPT, "Here is the file:", file_ref]
@@ -173,7 +161,6 @@ def extract_bill_data():
 
         raw = response.text.strip()
 
-        # -------- Step 4: Parse JSON safely --------
         try:
             parsed = json.loads(raw)
         except:
@@ -190,7 +177,6 @@ def extract_bill_data():
 
         pages = parsed.get("pagewise_line_items", [])
 
-        # -------- Step 5: Post-processing --------
         total_item_count = 0
         output_pages = []
 
@@ -216,7 +202,6 @@ def extract_bill_data():
                 "bill_items": normalized_items
             })
 
-        # -------- Step 6: Token usage --------
         try:
             usage = response.metrics
             input_tokens = usage.input_tokens
@@ -225,8 +210,7 @@ def extract_bill_data():
         except:
             input_tokens = output_tokens = total_tokens = 0
 
-        # -------- Step 7: Final Output --------
-        result = {
+        return jsonify({
             "is_success": True,
             "token_usage": {
                 "total_tokens": total_tokens,
@@ -237,9 +221,7 @@ def extract_bill_data():
                 "pagewise_line_items": output_pages,
                 "total_item_count": total_item_count
             }
-        }
-
-        return jsonify(result), 200
+        }), 200
 
     except Exception as e:
         return jsonify({
@@ -249,5 +231,7 @@ def extract_bill_data():
         }), 500
 
 
+# -------- Render-compatible entry point --------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
+    PORT = int(os.environ.get("PORT", 8000))  # Render provides PORT dynamically
+    app.run(host="0.0.0.0", port=PORT)
