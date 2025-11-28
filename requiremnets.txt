@@ -1,0 +1,9 @@
+flask
+requests
+pdf2image
+pillow
+pytesseract
+opencv-python-headless
+numpy
+openai
+werkzeug

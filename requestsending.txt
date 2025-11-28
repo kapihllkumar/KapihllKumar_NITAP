@@ -1,0 +1,53 @@
+
+
+
+
+$body = @{
+    document = "https://hackrx.blob.core.windows.net/assets/datathon-IIT/sample_1.png?sv=2025-07-05&spr=https&st=2025-11-24T14%3A21%3A03Z&se=2026-11-25T14%3A21%3A00Z&sr=b&sp=r&sig=2szJobwLVzcVSmg5IPWjRT9k7pHq2Tvifd6seRa2xRI%3D"
+}
+
+$response = Invoke-WebRequest -Uri "http://localhost:8000/extract-bill-data" `
+    -Method POST `
+    -ContentType "application/json" `
+    -Body ($body | ConvertTo-Json)
+
+$response.Content | ConvertFrom-Json | ConvertTo-Json -Depth 50
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+$FilePath = "Sample Document 1.pdf"
+$boundary = [System.Guid]::NewGuid().ToString()
+
+$LF = "`r`n"
+
+# PDF bytes must be encoded as ISO-8859-1 for multipart upload
+$fileBytes = [System.IO.File]::ReadAllBytes($FilePath)
+$fileContent = [System.Text.Encoding]::GetEncoding("ISO-8859-1").GetString($fileBytes)
+
+$bodyLines = (
+  "--$boundary$LF" +
+  "Content-Disposition: form-data; name=`"file`"; filename=`"$FilePath`"$LF" +
+  "Content-Type: application/pdf$LF$LF" +
+  $fileContent + $LF +
+  "--$boundary--$LF"
+)
+
+$response = Invoke-WebRequest -Uri "http://localhost:8000/extract-bill-data" `
+  -Method Post `
+  -ContentType "multipart/form-data; boundary=$boundary" `
+  -Body $bodyLines
+
+# ---------- PRETTY PRINT THE JSON ----------
+$response.Content | ConvertFrom-Json | ConvertTo-Json -Depth 50
+
