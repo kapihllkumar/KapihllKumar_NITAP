@@ -288,7 +288,7 @@ def extract_bill_data():
         if "file" in request.files:
             
             path = save_uploaded_file(request.files["file"])
-            print(f"[INPUT RECEIVED] Source file path or URL used → {path}")
+            print(f"[INPUT RECEIVED] Source file path or URL used - {path}")
         else:
             body = request.get_json(force=True)
             if "document" not in body:
@@ -298,7 +298,7 @@ def extract_bill_data():
 
             if doc.startswith("http://") or doc.startswith("https://"):
                 path = download_file(doc)
-                print(f"[INPUT RECEIVED] URL → {doc}\nSaved as → {path}")
+                print(f"[INPUT RECEIVED] URL - {doc}\nSaved as - {path}")
             else:
                 raw = base64.b64decode(doc)
                 header = raw[:4]
