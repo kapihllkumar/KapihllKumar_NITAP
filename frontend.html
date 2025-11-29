@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bill Data Extractor</title>
+    <style>
+        body {
+            font-family: Arial;
+            background-color: #f4f4f4;
+            padding: 20px;
+        }
+        .container {
+            width: 600px;
+            margin: auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0px 3px 8px rgba(0,0,0,0.1);
+        }
+        input, button {
+            width: 100%;
+            padding: 10px;
+            margin-top: 12px;
+            border-radius: 6px;
+        }
+        input {
+            border: 1px solid #ccc;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        #result {
+            white-space: pre-wrap;
+            background: #272822;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-size: 14px;
+        }
+        .loader {
+            text-align: center;
+            margin-top: 10px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Bill Data Extractor</h2>
+
+    <label>Enter Image/PDF URL</label>
+    <input type="text" id="urlInput" placeholder="https://example.com/file.png">
+
+    <center><b>OR</b></center>
+
+    <label>Upload Image/PDF File</label>
+    <input type="file" id="fileInput">
+
+    <button onclick="extractBill()">Extract Bill Data</button>
+
+    <div class="loader" id="loader">Processing... ⏳</div>
+
+    <h3>Response Output:</h3>
+    <div id="result">Waiting...</div>
+</div>
+
+<script>
+async function extractBill() {
+    const url = document.getElementById("urlInput").value.trim();
+    const file = document.getElementById("fileInput").files[0];
+    const resultBox = document.getElementById("result");
+    const loader = document.getElementById("loader");
+
+    resultBox.textContent = "";
+    loader.style.display = "block";
+
+    let requestOptions;
+
+    if (file) {
+        const formData = new FormData();
+        formData.append("file", file);
+        requestOptions = {
+            method: "POST",
+            body: formData
+        };
+    } else if (url !== "") {
+        requestOptions = {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ document: url })
+        };
+    } else {
+        loader.style.display = "none";
+        resultBox.textContent = "⚠️ Please upload a file or enter a URL.";
+        return;
+    }
+
+    try {
+        const res = await fetch("/extract-bill-data", requestOptions);
+        const data = await res.json();
+
+        loader.style.display = "none";
+
+        resultBox.textContent = JSON.stringify(data, null, 2);
+    } catch (error) {
+        loader.style.display = "none";
+        resultBox.textContent = "❌ Error: " + error;
+    }
+}
+</script>
+
+</body>
+</html>

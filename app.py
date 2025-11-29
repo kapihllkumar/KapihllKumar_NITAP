@@ -7,13 +7,12 @@ import traceback
 from typing import List, Dict, Any
 
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 
 from google import genai
-
-# ---------------- CONFIG ----------------
 from dotenv import load_dotenv
 
+# ---------------- CONFIG ----------------
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -21,6 +20,13 @@ GEMINI_MODEL = "gemini-2.0-flash"
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 app = Flask(__name__)
+
+
+# ---------------- FRONTEND ROUTE ----------------
+
+@app.route("/", methods=["GET"])
+def home():
+    return send_file("frontend.html")   # serve frontend
 
 
 # ---------------- FILE TYPE HELPERS ----------------
@@ -37,7 +43,7 @@ def get_extension_from_content_type(content_type: str) -> str:
     if "gif" in content_type:
         return ".gif"
 
-    return ".bin"  # fallback
+    return ".bin"
 
 
 def get_extension_from_magic_bytes(header: bytes) -> str:
@@ -89,22 +95,45 @@ def safe_float(v) -> float:
         return 0.0
 
 
+def get_token_usage(response):
+    usage = response.usage_metadata
+
+    if usage is None:
+        return 0, 0, 0
+
+    input_tokens = getattr(usage, "prompt_token_count", 0)
+    output_tokens = getattr(usage, "candidates_token_count", 0)
+    total_tokens = getattr(usage, "total_token_count",
+                           input_tokens + output_tokens)
+
+    return input_tokens, output_tokens, total_tokens
+
+
+
 # ---------------- GEMINI PROMPT ----------------
 
 EXTRACTION_PROMPT = """
-You are an expert in invoice understanding. You MUST detect page type yourself.
+You are an expert in invoice understanding.
 
-Possible page_type values ONLY:
+CRITICAL RULE ABOUT ORDER:
+- You MUST preserve the EXACT order of all line items exactly as they appear in the document.
+- Do NOT sort, regroup, reorder, merge or rearrange anything.
+- The first visible item in the document must be the first item in bill_items.
+- The last visible item must be the last in bill_items.
+- Maintain pure top-to-bottom visual order exactly as shown in the bill.
+
+Allowed page_type values ONLY:
 - "Bill Detail"
 - "Final Bill"
 - "Pharmacy"
+based on the content decide which is best suitable for page_type from allowed values
 
 Your output MUST strictly follow this EXACT JSON schema:
 
 {
   "pagewise_line_items": [
     {
-      "page_no": "string",
+      "page_no": "string(only number)",
       "page_type": "Bill Detail | Final Bill | Pharmacy",
       "bill_items": [
         {
@@ -118,12 +147,17 @@ Your output MUST strictly follow this EXACT JSON schema:
   ]
 }
 
-Rules:
-- Detect page_type based on content.
+STRICT RULES:
 - Extract every line item exactly once.
-- Do NOT add any subtotal or final total.
-- Return valid JSON ONLY. No comments, no text outside JSON.
+- DO NOT add missing items.
+- DO NOT group items.
+- DO NOT move items.
+- DO NOT correct spelling.
+- DO NOT infer anything; extract exactly as is.
+- Do NOT add subtotal or final total.
+- Return ONLY valid JSON. No comments, no text outside JSON.
 """
+
 
 
 # ---------------- API PROCESSING ----------------
@@ -202,13 +236,7 @@ def extract_bill_data():
                 "bill_items": normalized_items
             })
 
-        try:
-            usage = response.metrics
-            input_tokens = usage.input_tokens
-            output_tokens = usage.output_tokens
-            total_tokens = input_tokens + output_tokens
-        except:
-            input_tokens = output_tokens = total_tokens = 0
+        input_tokens, output_tokens, total_tokens = get_token_usage(response)
 
         return jsonify({
             "is_success": True,
@@ -233,5 +261,5 @@ def extract_bill_data():
 
 # -------- Render-compatible entry point --------
 if __name__ == "__main__":
-    PORT = int(os.environ.get("PORT", 8000))  # Render provides PORT dynamically
+    PORT = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=PORT)
