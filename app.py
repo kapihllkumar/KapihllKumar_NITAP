@@ -2,6 +2,7 @@ import os
 import io
 import json
 import base64
+import re
 import tempfile
 import traceback
 from typing import List, Dict, Any
@@ -11,6 +12,7 @@ from flask import Flask, request, jsonify, send_file
 
 from google import genai
 from dotenv import load_dotenv
+import fitz   # <-- added for PDF split
 
 # ---------------- CONFIG ----------------
 load_dotenv()
@@ -67,10 +69,18 @@ def download_file(url: str) -> str:
     content_type = response.headers.get("content-type", "")
     suffix = get_extension_from_content_type(content_type)
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    tmp.write(response.content)
-    tmp.close()
-    return tmp.name
+    # Generate a unique temp filename (NO open handle)
+    output_path = os.path.join(
+        tempfile.gettempdir(),
+        f"bill_download_{next(tempfile._get_candidate_names())}{suffix}"
+    )
+
+    # Write content manually (no locked file)
+    with open(output_path, "wb") as f:
+        f.write(response.content)
+
+    return output_path
+
 
 
 def save_uploaded_file(file_storage) -> str:
@@ -111,7 +121,6 @@ def get_token_usage(response):
 
 
 # ---------------- GEMINI PROMPT ----------------
-
 EXTRACTION_PROMPT = """
 You are an expert in invoice understanding.
 
@@ -126,7 +135,7 @@ Allowed page_type values ONLY:
 - "Bill Detail"
 - "Final Bill"
 - "Pharmacy"
-based on the content decide which is best suitable for page_type from allowed values
+Based on the content decide which is best suitable for page_type from allowed values.
 
 Your output MUST strictly follow this EXACT JSON schema:
 
@@ -147,16 +156,86 @@ Your output MUST strictly follow this EXACT JSON schema:
   ]
 }
 
+IMPORTANT RULE ABOUT MULTI-LINE NAMES:
+- Many item names in invoices span multiple physical lines (wrapping or sub-text).
+- You MUST treat all consecutive text that belongs to the same item as ONE item_name.
+- If a line below clearly belongs to the previous item (e.g., doctor qualifications, batch number, description), merge them into a single item_name field.
+- DO NOT create a new bill item just because the text wrapped to next line.
+
+IMPORTANT MAPPING RULE FOR RATE VS TOTAL AMOUNT:
+Invoices may contain both a per-unit Amount and a Total Amount.
+
+You MUST follow this mapping strictly:
+- If a row contains both a per-unit Amount AND a Total (rate × quantity):
+    - item_rate = the per-unit Amount exactly as printed
+    - item_amount = the Total (rate × quantity) exactly as printed
+- If only a per-unit Amount is shown and quantity > 1:
+    - treat that value as item_rate, not item_amount
+- If a Total is printed anywhere on the same line or vertically aligned:
+    - assign it to item_amount
+- NEVER assign the per-unit amount to item_amount.
+- NEVER leave item_rate as 0 if a per-unit amount exists.
+- If two numeric values appear for an item (excluding quantity):
+    - the smaller number MUST be item_rate
+    - the larger number MUST be item_amount
+
+HANDWRITTEN / ROTATED INTERPRETATION RULE:
+- If an item's amount is not printed on the exact line, look at vertically aligned handwritten numbers in the same column.
+- If an amount is written slightly above/below the item, associate it with that item.
+- Do NOT ignore items simply because the amount is not on the exact line.
+- If a handwritten amount appears as two separated numbers (e.g., "266 94", "266\n94", "266-94"):
+    - You MUST interpret it as a decimal → 266.94
+- If the decimal point is faint / missing / unclear:
+    - You MUST infer the decimal by reading the spatial alignment
+- If two numbers are written slightly vertically aligned (top = whole, bottom = decimals):
+    - Combine them into one decimal value
+- NEVER round decimals. Always return exact printed decimal.
+
+
 STRICT RULES:
-- Extract every line item exactly once.
+- Preserve the original top-to-bottom item order.
+- Extract every real item exactly once.
+- DO NOT split items due to line breaks inside item_name.
 - DO NOT add missing items.
-- DO NOT group items.
-- DO NOT move items.
-- DO NOT correct spelling.
-- DO NOT infer anything; extract exactly as is.
-- Do NOT add subtotal or final total.
-- Return ONLY valid JSON. No comments, no text outside JSON.
+- DO NOT group multiple different items.
+- DO NOT infer extra items.
+- Do NOT output subtotal/total.
+- Return ONLY valid JSON.
+
+DISCOUNT / FEE EXCLUSION RULE:
+The following must NOT be treated as bill items under any circumstances:
+- Any type of discount (e.g., "Discount", "GST Discount", "Bill Discount", "Concession")
+- Any rounding adjustments (e.g., "Round Off", "R/o", "Rounding")
+- Any tax summary lines (e.g., GST %, CGST, SGST)
+- Any totals, subtotals, net amounts, balance, deposit, advance, refunds.
+
+These lines must be completely ignored and MUST NOT appear inside bill_items
 """
+
+
+
+# ---------------- PAGE SPLITTING (NEW) ----------------
+
+def split_pdf_to_images(pdf_path: str):
+    doc = fitz.open(pdf_path)
+    imgs = []
+
+    for page_number in range(len(doc)):
+        page = doc.load_page(page_number)
+        pix = page.get_pixmap(dpi=200)
+
+        # Create guaranteed unique filename
+        filename = f"bill_page_{page_number+1}_{next(tempfile._get_candidate_names())}.png"
+        output_path = os.path.join(tempfile.gettempdir(), filename)
+
+        # Save image (no locked file involved)
+        pix.save(output_path)
+
+        imgs.append(output_path)
+
+    doc.close()
+    return imgs
+
 
 
 
@@ -186,30 +265,51 @@ def extract_bill_data():
                 tmp.close()
                 path = tmp.name
 
-        file_ref = client.files.upload(file=path)
+        # ---------------- PROCESS PAGE BY PAGE ----------------
 
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[EXTRACTION_PROMPT, "Here is the file:", file_ref]
-        )
+        page_images = split_pdf_to_images(path)
 
-        raw = response.text.strip()
+        combined_pages = []
 
-        try:
-            parsed = json.loads(raw)
-        except:
-            import re
-            m = re.search(r"(\{[\s\S]*\})", raw)
-            if m:
-                parsed = json.loads(m.group(1))
-            else:
-                return jsonify({
-                    "is_success": False,
-                    "error": "Gemini did not return valid JSON",
-                    "raw": raw
-                }), 500
+        for page_index, img_path in enumerate(page_images, start=1):
 
-        pages = parsed.get("pagewise_line_items", [])
+            file_ref = client.files.upload(file=img_path)
+
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=[
+                    EXTRACTION_PROMPT,
+                    f"Extract items from page {page_index}",
+                    file_ref
+                ]
+            )
+
+            raw = response.text.strip()
+            raw = raw.replace("```json", "").replace("```", "").strip()
+            raw = re.sub(r"^json", "", raw, flags=re.IGNORECASE).strip()
+
+            # Try normal parse
+            try:
+                parsed = json.loads(raw)
+            except:
+                # Cleanup
+                start = raw.find("{")
+                end = raw.rfind("}") + 1
+                cleaned = raw[start:end]
+                cleaned = cleaned.replace("\x00", "")
+                cleaned = re.sub(r",\s*}", "}", cleaned)
+                cleaned = re.sub(r",\s*]", "]", cleaned)
+                parsed = json.loads(cleaned)
+
+            page_data = parsed["pagewise_line_items"][0]
+            page_data["page_no"] = str(page_index)
+
+            combined_pages.append(page_data)
+
+        # Replace global parsed
+        pages = combined_pages
+
+        # ---------------- NORMALIZATION (unchanged) ----------------
 
         total_item_count = 0
         output_pages = []
@@ -221,11 +321,19 @@ def extract_bill_data():
 
             normalized_items = []
             for it in bill_items:
+
+                amount = safe_float(it.get("item_amount"))
+                rate   = safe_float(it.get("item_rate"))
+                qty    = safe_float(it.get("item_quantity"))
+
+                if amount == 0:
+                    continue
+
                 normalized_items.append({
-                    "item_name": (it.get("item_name") or "").strip(),
-                    "item_amount": safe_float(it.get("item_amount")),
-                    "item_rate": safe_float(it.get("item_rate")),
-                    "item_quantity": safe_float(it.get("item_quantity")),
+                    "item_name": (it.get("item_name") or "").strip().replace("\n", " "),
+                    "item_amount": float(f"{amount:.2f}"),
+                    "item_rate": float(f"{rate:.2f}"),
+                    "item_quantity": float(f"{qty:.2f}")
                 })
 
             total_item_count += len(normalized_items)
@@ -236,15 +344,8 @@ def extract_bill_data():
                 "bill_items": normalized_items
             })
 
-        input_tokens, output_tokens, total_tokens = get_token_usage(response)
-
         return jsonify({
             "is_success": True,
-            "token_usage": {
-                "total_tokens": total_tokens,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens
-            },
             "data": {
                 "pagewise_line_items": output_pages,
                 "total_item_count": total_item_count
@@ -257,6 +358,7 @@ def extract_bill_data():
             "error": str(e),
             "trace": traceback.format_exc()
         }), 500
+
 
 
 # -------- Render-compatible entry point --------
