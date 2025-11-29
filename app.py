@@ -275,6 +275,12 @@ def split_pdf_to_images(pdf_path: str):
 
 
 # ---------------- API PROCESSING ----------------
+@app.route("/tmp-file/<filename>", methods=["GET"])
+def get_tmp_file(filename):
+    path = f"/tmp/{filename}"
+    if not os.path.exists(path):
+        return jsonify({"error": "File not found"}), 404
+    return send_file(path)
 
 @app.route("/extract-bill-data", methods=["POST"])
 def extract_bill_data():
