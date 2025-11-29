@@ -191,6 +191,41 @@ HANDWRITTEN / ROTATED INTERPRETATION RULE:
     - Combine them into one decimal value
 - NEVER round decimals. Always return exact printed decimal.
 
+ITEM CONTINUATION RULE (CRITICAL):
+Invoices may list items in multiple vertical sections, columns, or blocks.
+You MUST extract EVERY item in the entire page, regardless of how many 
+columns, boxes, or separated regions exist.
+
+You MUST continue reading ALL visible rows until the end of the page.
+
+Do NOT stop after the first column or section.
+Do NOT stop after the first visible block of items.
+Do NOT assume that the first box is the only list.
+
+You MUST scan the ENTIRE PAGE from top-to-bottom and left-to-right
+and extract ALL rows that contain:
+- an item name
+- a quantity
+- a rate OR an amount OR handwritten value
+
+If an item has *either* quantity OR rate OR amount,
+then it MUST be included.
+
+ITEM HEADER SKIP RULE:
+NEVER treat the following as bill items:
+- headings (“ITEM NAME”, “DESCRIPTION”, “RATE”, “AMOUNT”, “QTY”)
+- section titles (“CONSULTATION”, “DRUGS”, “CONSUMABLES”, etc.)
+- table borders or column names
+
+MULTI-COLUMN RULE:
+If items are arranged in two or more columns:
+- Read column 1 top-to-bottom
+- Then column 2 top-to-bottom
+- Then column 3 top-to-bottom (if present)
+Always preserve natural visual order.
+
+ABSOLUTE MANDATE:
+You MUST extract ALL items printed on the page, not just the first set of rows.
 
 STRICT RULES:
 - Preserve the original top-to-bottom item order.
@@ -245,7 +280,9 @@ def split_pdf_to_images(pdf_path: str):
 def extract_bill_data():
     try:
         if "file" in request.files:
+            
             path = save_uploaded_file(request.files["file"])
+            print(f"[INPUT RECEIVED] Source file path or URL used → {path}")
         else:
             body = request.get_json(force=True)
             if "document" not in body:
@@ -255,6 +292,7 @@ def extract_bill_data():
 
             if doc.startswith("http://") or doc.startswith("https://"):
                 path = download_file(doc)
+                print(f"[INPUT RECEIVED] URL → {doc}\nSaved as → {path}")
             else:
                 raw = base64.b64decode(doc)
                 header = raw[:4]
