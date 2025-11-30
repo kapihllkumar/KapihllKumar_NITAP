@@ -1,9 +1,9 @@
-# 📄 Invoice Extraction API (Gemini 2.0 Flash)
+# 📄 Invoice Extraction API 
 
 A fast and accurate **invoice data extraction API** built using:
 
 - **Python + Flask**
-- **Google Gemini 2.0 Flash**
+- **Google Gemini **
 - **OCR + Line Item Parsing**
 - Supports **PDF**, **PNG**, **JPG**, **JPEG**, **GIF**, and **URL-based documents**
 - Supports **Base64 documents**
