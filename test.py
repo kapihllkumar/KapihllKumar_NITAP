@@ -1,13 +1,27 @@
-import requests
-import json
+import os
+from google import genai
+from dotenv import load_dotenv
 
-url = "http://localhost:8000/extract-bill-data"
+# Load GEMINI_API_KEY from .env
+load_dotenv()
+API_KEY = os.getenv("GEMINI_API_KEY")
 
-payload = {
-    "document": "https://hackrx.blob.core.windows.net/assets/datathon-IIT/HackRx%20Bill%20Extraction%20API.postman_collection.json?sv=2025-07-05&spr=https&st=2025-11-28T07%3A21%3A28Z&se=2026-11-29T07%3A21%3A00Z&sr=b&sp=r&sig=GTu74m7MsMT1fXcSZ8v92ijcymmu55sRklMfkTPuobc%3D"
-}
+if not API_KEY:
+    raise ValueError("GEMINI_API_KEY not found in environment variables.")
 
-response = requests.post(url, json=payload)
+# Create client
+client = genai.Client(api_key=API_KEY)
 
-print("STATUS:", response.status_code)
-print("RESPONSE:\n", json.dumps(response.json(), indent=4))
+def list_all_models():
+    print("🔍 Fetching available Gemini models...\n")
+    try:
+        models = client.models.list()   # <-- Important
+        print("✅ Models available for your API key:\n")
+        for m in models:
+            print(f"• {m.name}   (type: {m.model_type})")
+    except Exception as e:
+        print("\n❌ Error while fetching models:")
+        print(e)
+
+if __name__ == "__main__":
+    list_all_models()
