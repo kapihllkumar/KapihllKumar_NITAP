@@ -23,7 +23,7 @@ This project extracts:
 ✔ Send **URL** pointing to an invoice (PDF/PNG/JPG)  
 ✔ Supports **Base64 encoded documents**  
 ✔ Automatic file type detection  
-✔ Uses **Gemini 2.0 Flash** for OCR  
+✔ Uses **Gemini Flash** for OCR  
 ✔ Clean structured JSON  
 ✔ Token usage tracking  
 
